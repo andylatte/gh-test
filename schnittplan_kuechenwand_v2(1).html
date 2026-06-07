@@ -1,0 +1,327 @@
+
+<style>
+* { box-sizing: border-box; }
+.wrap { padding: 1rem 0; font-family: var(--font-sans); color: var(--color-text-primary); }
+.summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 1.5rem; }
+.scard { background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: .75rem 1rem; }
+.scard .label { font-size: 12px; color: var(--color-text-secondary); margin-bottom: 4px; }
+.scard .val { font-size: 20px; font-weight: 500; }
+.tabs { display: flex; gap: 6px; margin-bottom: 1rem; flex-wrap: wrap; }
+.tab { font-size: 13px; padding: 4px 12px; border: 0.5px solid var(--color-border-secondary); border-radius: var(--border-radius-md); cursor: pointer; background: transparent; color: var(--color-text-secondary); }
+.tab.active { background: var(--color-background-secondary); color: var(--color-text-primary); border-color: var(--color-border-primary); font-weight: 500; }
+.plate-wrap { background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); padding: 1rem; margin-bottom: .75rem; }
+.plate-title { font-size: 13px; font-weight: 500; margin-bottom: .5rem; color: var(--color-text-secondary); }
+.tooltip { position: absolute; background: var(--color-background-primary); border: 0.5px solid var(--color-border-secondary); border-radius: var(--border-radius-md); padding: 6px 10px; font-size: 12px; pointer-events: none; display: none; z-index: 10; line-height: 1.6; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 1rem; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--color-text-secondary); }
+.legend-dot { width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0; }
+.parts-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 1.5rem; }
+.parts-table th { text-align: left; padding: 6px 8px; font-weight: 500; border-bottom: 0.5px solid var(--color-border-tertiary); color: var(--color-text-secondary); font-size: 12px; }
+.parts-table td { padding: 6px 8px; border-bottom: 0.5px solid var(--color-border-tertiary); }
+h3 { font-size: 14px; font-weight: 500; margin: 1.5rem 0 .5rem; color: var(--color-text-secondary); }
+.plate-container { position: relative; }
+</style>
+
+<div class="wrap">
+<h2 class="sr-only">Schnittplan Küchenwand — Belegungsvisualisierung</h2>
+<div class="tooltip" id="tt"></div>
+<div class="summary" id="summary"></div>
+<div class="tabs" id="tabs"></div>
+<div id="plates"></div>
+<div class="legend" id="legend"></div>
+<h3>Stückliste</h3>
+<table class="parts-table">
+  <thead><tr><th>Pos.</th><th>Gruppe</th><th>Länge</th><th>Breite</th><th>Anz.</th><th>Fläche</th></tr></thead>
+  <tbody id="parts-body"></tbody>
+</table>
+</div>
+
+<script>
+const PLATE_W = 2800, PLATE_H = 2070;
+const PART_W = 570;
+const KERF = 4;
+const STRIP_H = PART_W + KERF;
+const STRIPS_PER_PLATE = Math.floor(PLATE_H / STRIP_H); // 3
+
+const rawParts = [
+  { name:"1–4",   group:"Oben",  count:4,  l:1200, ri:0 },
+  { name:"5–6",   group:"Oben",  count:2,  l:1620, ri:1 },
+  { name:"7–25",  group:"Säule", count:19, l:600,  ri:2 },
+  { name:"26–29", group:"Säule", count:4,  l:300,  ri:3 },  // FIXED 30→300
+  { name:"30–37", group:"Oben",  count:8,  l:418,  ri:4 },
+  { name:"38–45", group:"Säule", count:8,  l:2230, ri:5 },
+  { name:"46",    group:"Säule", count:1,  l:1450, ri:6 },
+];
+
+const COLORS = {
+  "Oben":  { fill:"#C0DD97", stroke:"#3B6D11", hover:"#97C459" },
+  "Säule": { fill:"#B5D4F4", stroke:"#185FA5", hover:"#85B7EB" },
+};
+
+let allParts = [];
+rawParts.forEach(r => {
+  for (let i = 0; i < r.count; i++) {
+    allParts.push({ name: r.name, group: r.group, l: r.l, w: PART_W, ri: r.ri });
+  }
+});
+allParts.sort((a, b) => b.l - a.l);
+
+let plates = [];
+
+function newPlate() {
+  let strips = [];
+  for (let i = 0; i < STRIPS_PER_PLATE; i++) strips.push({ used: 0, parts: [] });
+  return { strips };
+}
+
+function packPart(part) {
+  for (let p = 0; p < plates.length; p++) {
+    for (let s = 0; s < plates[p].strips.length; s++) {
+      const strip = plates[p].strips[s];
+      const needed = strip.parts.length === 0 ? part.l : part.l + KERF;
+      if (strip.used + needed <= PLATE_W) {
+        const x = strip.parts.length === 0 ? 0 : strip.used + KERF;
+        strip.parts.push({ ...part, x });
+        strip.used = x + part.l;
+        return;
+      }
+    }
+  }
+  let plate = newPlate();
+  plates.push(plate);
+  plate.strips[0].parts.push({ ...part, x: 0 });
+  plate.strips[0].used = part.l;
+}
+
+allParts.forEach(p => packPart(p));
+
+const totalParts = allParts.length;
+const totalArea = allParts.reduce((s, p) => s + p.l * p.w, 0);
+const totalPlateArea = plates.length * PLATE_W * PLATE_H;
+const efficiency = (totalArea / totalPlateArea * 100).toFixed(1);
+
+document.getElementById('summary').innerHTML = `
+  <div class="scard"><div class="label">Platten gesamt</div><div class="val">${plates.length}</div></div>
+  <div class="scard"><div class="label">Teile gesamt</div><div class="val">${totalParts}</div></div>
+  <div class="scard"><div class="label">Materialnutzung</div><div class="val">${efficiency}%</div></div>
+  <div class="scard"><div class="label">Plattenformat</div><div class="val" style="font-size:14px">2800×2070</div></div>
+`;
+
+const tt = document.getElementById('tt');
+let activePlate = 0;
+
+function showTip(evt, part, plateIdx, stripIdx) {
+  const rest = PLATE_W - plates[plateIdx].strips[stripIdx].used;
+  tt.innerHTML = `<strong>Pos. ${part.name}</strong><br>Gruppe: ${part.group}<br>Maß: ${part.l} × ${part.w} mm<br>Platte ${plateIdx+1}, Streifen ${stripIdx+1}<br>Restlänge Streifen: ${rest} mm`;
+  tt.style.display = 'block';
+  moveTip(evt);
+}
+
+function moveTip(evt) {
+  const wrap = document.getElementById('plates');
+  const r = wrap.getBoundingClientRect();
+  const x = evt.clientX - r.left + 10;
+  const y = evt.clientY - r.top + 10;
+  tt.style.left = Math.min(x, r.width - 190) + 'px';
+  tt.style.top = y + 'px';
+}
+
+function hideTip() { tt.style.display = 'none'; }
+
+function renderPlates() {
+  const platesEl = document.getElementById('plates');
+  platesEl.innerHTML = '';
+  platesEl.style.position = 'relative';
+
+  const p = plates[activePlate];
+  const wrap = document.createElement('div');
+  wrap.className = 'plate-wrap plate-container';
+
+  const partsOnPlate = p.strips.reduce((s, st) => s + st.parts.length, 0);
+  const title = document.createElement('div');
+  title.className = 'plate-title';
+  title.textContent = `Platte ${activePlate+1} von ${plates.length} — ${partsOnPlate} Teile — Teile anklicken für Details`;
+  wrap.appendChild(title);
+
+  const VW = 640, VH = Math.round(640 * PLATE_H / PLATE_W);
+  const scaleX = VW / PLATE_W;
+  const scaleY = VH / PLATE_H;
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${VW} ${VH}`);
+  svg.setAttribute('width', '100%');
+  svg.style.cursor = 'default';
+
+  function el(tag, attrs) {
+    const e = document.createElementNS(svgNS, tag);
+    Object.entries(attrs).forEach(([k,v]) => e.setAttribute(k, v));
+    return e;
+  }
+
+  // Plate background
+  svg.appendChild(el('rect', { x:0, y:0, width:VW, height:VH, fill:'#D3D1C7', rx:3 }));
+
+  // Strips
+  p.strips.forEach((strip, si) => {
+    const sy = si * STRIP_H * scaleY;
+    const sh = PART_W * scaleY;
+
+    // Strip background
+    svg.appendChild(el('rect', { x:0, y:sy, width:VW, height:sh, fill:'#E8E6DF' }));
+
+    // Strip label
+    const sl = document.createElementNS(svgNS, 'text');
+    sl.setAttribute('x', 3); sl.setAttribute('y', sy + 10);
+    sl.setAttribute('fill', '#888780'); sl.setAttribute('font-size', '8');
+    sl.setAttribute('font-family', 'var(--font-sans)');
+    sl.textContent = `S${si+1}  570mm`;
+    svg.appendChild(sl);
+
+    // Parts
+    strip.parts.forEach((part) => {
+      const px = part.x * scaleX;
+      const pw = part.l * scaleX;
+      const c = COLORS[part.group];
+
+      const g = document.createElementNS(svgNS, 'g');
+      g.style.cursor = 'pointer';
+
+      const rect = el('rect', { x:px, y:sy+1, width:pw, height:sh-2, fill:c.fill, rx:2, stroke:c.stroke, 'stroke-width':'0.5' });
+      g.appendChild(rect);
+
+      if (pw > 16) {
+        const txt = document.createElementNS(svgNS, 'text');
+        txt.setAttribute('x', px + pw/2);
+        txt.setAttribute('y', sy + sh/2);
+        txt.setAttribute('text-anchor', 'middle');
+        txt.setAttribute('dominant-baseline', 'central');
+        txt.setAttribute('fill', c.stroke);
+        txt.setAttribute('font-size', Math.min(9, pw/4));
+        txt.setAttribute('font-family', 'var(--font-sans)');
+        txt.setAttribute('pointer-events', 'none');
+        txt.textContent = pw > 30 ? `${part.l}` : '';
+        g.appendChild(txt);
+      }
+
+      g.addEventListener('mouseenter', (e) => {
+        rect.setAttribute('fill', c.hover);
+        showTip(e, part, activePlate, si);
+      });
+      g.addEventListener('mousemove', moveTip);
+      g.addEventListener('mouseleave', () => { rect.setAttribute('fill', c.fill); hideTip(); });
+      g.addEventListener('click', (e) => { showTip(e, part, activePlate, si); e.stopPropagation(); });
+
+      svg.appendChild(g);
+
+      // Kerf marker (after first part)
+      if (part.x > 0) {
+        const kx = part.x * scaleX - KERF * scaleX / 2;
+        const kline = el('line', { x1:kx, y1:sy, x2:kx, y2:sy+sh, stroke:'#73726c', 'stroke-width':'0.8', 'stroke-dasharray':'2 2' });
+        svg.appendChild(kline);
+      }
+    });
+
+    // Dimension: remaining space label
+    const rest = PLATE_W - strip.used;
+    if (rest > 50) {
+      const rx2 = strip.used * scaleX + 2;
+      const rw = rest * scaleX;
+      if (rw > 8) {
+        svg.appendChild(el('rect', { x: strip.used * scaleX, y: sy+1, width: rw, height: sh-2, fill:'none', stroke:'#B4B2A9', 'stroke-width':'0.5', 'stroke-dasharray':'3 2', rx:2 }));
+        if (rw > 24) {
+          const rt = document.createElementNS(svgNS, 'text');
+          rt.setAttribute('x', strip.used * scaleX + rw/2);
+          rt.setAttribute('y', sy + sh/2);
+          rt.setAttribute('text-anchor', 'middle');
+          rt.setAttribute('dominant-baseline', 'central');
+          rt.setAttribute('fill', '#888780');
+          rt.setAttribute('font-size', Math.min(8, rw/5));
+          rt.setAttribute('font-family', 'var(--font-sans)');
+          rt.setAttribute('pointer-events', 'none');
+          rt.textContent = `+${rest}`;
+          svg.appendChild(rt);
+        }
+      }
+    }
+  });
+
+  // Horizontal strip dividers
+  for (let i = 1; i <= STRIPS_PER_PLATE; i++) {
+    const ly = i * STRIP_H * scaleY;
+    svg.appendChild(el('line', { x1:0, y1:ly, x2:VW, y2:ly, stroke:'#73726c', 'stroke-width':'1' }));
+  }
+
+  // Remaining plate area at bottom (Rest der Platte nach 3 Streifen)
+  const restY = STRIPS_PER_PLATE * STRIP_H * scaleY;
+  const restH = VH - restY;
+  if (restH > 2) {
+    svg.appendChild(el('rect', { x:0, y:restY, width:VW, height:restH, fill:'#B4B2A9', rx:0 }));
+    const rl = document.createElementNS(svgNS, 'text');
+    rl.setAttribute('x', VW/2); rl.setAttribute('y', restY + restH/2);
+    rl.setAttribute('text-anchor', 'middle'); rl.setAttribute('dominant-baseline', 'central');
+    rl.setAttribute('fill', '#5F5E5A'); rl.setAttribute('font-size', '8');
+    rl.setAttribute('font-family', 'var(--font-sans)');
+    const restMM = PLATE_H - STRIPS_PER_PLATE * STRIP_H;
+    rl.textContent = `Verschnitt unten: ${restMM} mm`;
+    svg.appendChild(rl);
+  }
+
+  // Dimension labels
+  const dw = document.createElementNS(svgNS, 'text');
+  dw.setAttribute('x', VW/2); dw.setAttribute('y', VH - 1);
+  dw.setAttribute('text-anchor', 'middle'); dw.setAttribute('fill', '#5F5E5A');
+  dw.setAttribute('font-size', '8'); dw.setAttribute('font-family', 'var(--font-sans)');
+  dw.textContent = '← 2800 mm →';
+  svg.appendChild(dw);
+
+  // Border
+  svg.appendChild(el('rect', { x:0, y:0, width:VW, height:VH, fill:'none', stroke:'#5F5E5A', 'stroke-width':'1', rx:3 }));
+
+  svg.addEventListener('click', hideTip);
+  wrap.appendChild(svg);
+  platesEl.appendChild(wrap);
+}
+
+function buildTabs() {
+  const tabsEl = document.getElementById('tabs');
+  tabsEl.innerHTML = '';
+  plates.forEach((_, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'tab' + (i === activePlate ? ' active' : '');
+    btn.textContent = `Platte ${i+1}`;
+    btn.onclick = () => { activePlate = i; buildTabs(); renderPlates(); };
+    tabsEl.appendChild(btn);
+  });
+}
+
+// Legend
+const legendEl = document.getElementById('legend');
+[["Oben", "Oben vertikal"], ["Säule", "Säule vertikal"]].forEach(([key, label]) => {
+  const c = COLORS[key];
+  const item = document.createElement('div');
+  item.className = 'legend-item';
+  item.innerHTML = `<div class="legend-dot" style="background:${c.fill};border:0.5px solid ${c.stroke}"></div>${label}`;
+  legendEl.appendChild(item);
+});
+const wi = document.createElement('div');
+wi.className = 'legend-item';
+wi.innerHTML = `<div class="legend-dot" style="background:#B4B2A9;border:0.5px solid #888780"></div>Verschnitt`;
+legendEl.appendChild(wi);
+
+// Parts table
+const tbody = document.getElementById('parts-body');
+rawParts.forEach(r => {
+  const tr = document.createElement('tr');
+  const area = (r.l * PART_W * r.count / 1e6).toFixed(3);
+  tr.innerHTML = `<td>${r.name}</td><td>${r.group}</td><td>${r.l} mm</td><td>${PART_W} mm</td><td>${r.count}</td><td>${area} m²</td>`;
+  tbody.appendChild(tr);
+});
+const totalM2 = (totalArea / 1e6).toFixed(3);
+const tr = document.createElement('tr');
+tr.innerHTML = `<td colspan="4" style="font-weight:500;padding:6px 8px;border-top:1px solid var(--color-border-secondary)">Gesamt</td><td style="font-weight:500;padding:6px 8px;border-top:1px solid var(--color-border-secondary)">${totalParts}</td><td style="font-weight:500;padding:6px 8px;border-top:1px solid var(--color-border-secondary)">${totalM2} m²</td>`;
+tbody.appendChild(tr);
+
+buildTabs();
+renderPlates();
+</script>
